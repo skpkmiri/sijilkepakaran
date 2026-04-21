@@ -1,0 +1,500 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Award, Users, UserPlus, Link as LinkIcon, Menu, X, GraduationCap, ImageIcon, Maximize2, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+
+// --- KONFIGURASI FIREBASE SENDIRI (Projek SKPK Miri) ---
+const firebaseConfig = {
+  apiKey: "AIzaSyBtJ0S-mNI6H0HJVl8Mhb1P4qnXHR9VIDU",
+  authDomain: "sistem-sijil-skpk.firebaseapp.com",
+  projectId: "sistem-sijil-skpk",
+  storageBucket: "sistem-sijil-skpk.firebasestorage.app",
+  messagingSenderId: "474695114341",
+  appId: "1:474695114341:web:db67fbd9118d57012bf08c"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Data permulaan (Hanya digunakan jika pangkalan data masih kosong)
+const initialData = [
+  { id: 1, name: "Google Certified Educator Level 1", teachers: [] },
+  { id: 2, name: "Google Certified Educator Level 2", teachers: [] },
+  { id: 3, name: "Gemini Certified Educator", teachers: [] },
+  { id: 4, name: "Raspberry Pi Instructor", teachers: [] },
+  { 
+    id: 5, 
+    name: "Canva Certified", 
+    teachers: [
+      { id: 101, name: "Jacquelinne Tiong Hoe Ding", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nJacquelinne" },
+      { id: 102, name: "Mohamad Abidin bin Sipek", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nMohamad+Abidin" },
+      { id: 103, name: "Ling Mee Choo", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nLing+Mee+Choo" },
+      { id: 104, name: "Sabariah binti Solhi", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nSabariah" }
+    ] 
+  },
+  { 
+    id: 6, 
+    name: "Magic School : AI Educator", 
+    teachers: [
+      { id: 105, name: "Ling Mee Choo", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Magic+School\nLing+Mee+Choo" },
+      { id: 106, name: "Mohamad Abidin bin Sipek", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Magic+School\nMohamad+Abidin" }
+    ] 
+  }
+];
+
+// Fungsi untuk mengecilkan saiz gambar sebelum dihantar ke pangkalan data
+const compressImage = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800; // Hadkan resolusi supaya muat dan laju
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height && width > MAX_WIDTH) {
+          height *= MAX_WIDTH / width;
+          width = MAX_WIDTH;
+        } else if (height > MAX_HEIGHT) {
+          width *= MAX_HEIGHT / height;
+          height = MAX_HEIGHT;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7)); // Kualiti 70%
+      };
+    };
+    reader.onerror = (error) => reject(error);
+  });
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [data, setData] = useState(initialData); // Akan diganti dengan data LIVE
+  const [activeTabId, setActiveTabId] = useState(1);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  // State Form
+  const [newTeacherName, setNewTeacherName] = useState("");
+  const [newCertImage, setNewCertImage] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  const [selectedTeacherModal, setSelectedTeacherModal] = useState(null);
+  const [expandedTeacher, setExpandedTeacher] = useState(null); // Untuk butang Accordion
+  const fileInputRef = useRef(null);
+
+  // 1. Pengesahan Pengguna (Live Authentication)
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Gagal log masuk:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Tarik Data Secara Live dari Firestore Cikgu
+  useEffect(() => {
+    if (!user) return;
+    
+    const categoriesRef = collection(db, 'categories');
+    
+    const unsubscribe = onSnapshot(categoriesRef, (snapshot) => {
+      if (snapshot.empty) {
+        // Jika pangkalan data kosong, kita masukkan data asas (initialData)
+        initialData.forEach(async (cat) => {
+          await setDoc(doc(categoriesRef, String(cat.id)), cat);
+        });
+      } else {
+        // Tarik data live dan susun mengikut ID
+        const loadedData = snapshot.docs.map(doc => doc.data());
+        loadedData.sort((a, b) => a.id - b.id);
+        setData(loadedData);
+      }
+    }, (error) => {
+      console.error("Ralat pangkalan data:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const activeCert = data.find(cert => cert.id === activeTabId) || data[0];
+
+  const handleAddTeacher = async (e) => {
+    e.preventDefault();
+    if (!newTeacherName.trim() || isUploading) return;
+    setIsUploading(true);
+
+    try {
+      let finalImage = newCertImage;
+      
+      // Jika cikgu upload gambar, kita mampatkan dan tukar kepada tulisan (base64)
+      if (selectedFile) {
+        finalImage = await compressImage(selectedFile);
+      } else if (!newCertImage) {
+        finalImage = `https://placehold.co/600x400/f8fafc/94a3b8?text=Sijil+Direkod\n${newTeacherName.split(' ').join('+')}`;
+      }
+
+      const newTeacher = {
+        id: Date.now(),
+        name: newTeacherName.trim(), // Pastikan nama kemas
+        certImage: finalImage
+      };
+
+      // Simpan terus ke pangkalan data LIVE
+      const updatedTeachers = [...activeCert.teachers, newTeacher];
+      const categoryRef = doc(db, 'categories', String(activeTabId));
+      
+      await updateDoc(categoryRef, { teachers: updatedTeachers });
+
+      // Kosongkan form selepas berjaya
+      setNewTeacherName("");
+      setNewCertImage("");
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (error) {
+      console.error("Ralat menambah guru:", error);
+      alert("Terdapat ralat semasa memuat naik gambar. Pastikan saiz tidak terlalu besar.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const removeTeacher = async (teacherId) => {
+    try {
+      const updatedTeachers = activeCert.teachers.filter(t => t.id !== teacherId);
+      const categoryRef = doc(db, 'categories', String(activeTabId));
+      await updateDoc(categoryRef, { teachers: updatedTeachers });
+    } catch (error) {
+      console.error("Ralat memadam rekod:", error);
+    }
+  };
+
+  // Semak jika kategori ini adalah kategori yang perlukan Accordion (Group ikut nama)
+  const isGroupedCategory = activeCert.id === 5 || activeCert.id === 6;
+
+  // Kumpulkan sijil ikut nama guru (Hanya untuk kategori 5 & 6)
+  const groupedTeachers = isGroupedCategory ? activeCert.teachers.reduce((acc, t) => {
+    if (!acc[t.name]) acc[t.name] = [];
+    acc[t.name].push(t);
+    return acc;
+  }, {}) : {};
+
+  return (
+    <div className="flex h-screen bg-gray-50 font-sans">
+      
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar Navigation */}
+      <aside className={`fixed inset-y-0 left-0 w-72 bg-blue-800 text-white transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 transition duration-200 ease-in-out z-30 flex flex-col shadow-xl`}>
+        <div className="p-6 flex items-center justify-between border-b border-blue-700">
+          <div className="flex items-center gap-3">
+            <GraduationCap className="w-8 h-8 text-yellow-400 flex-shrink-0" />
+            <h1 className="text-lg font-bold leading-tight">Sistem Rekod<br/>Kepakaran Guru<br/><span className="text-yellow-200 text-sm">SKPK Miri</span></h1>
+          </div>
+          <button className="md:hidden" onClick={() => setIsSidebarOpen(false)}>
+            <X className="w-6 h-6 text-blue-200 hover:text-white" />
+          </button>
+        </div>
+        
+        <div className="p-4 flex-1 overflow-y-auto">
+          <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider mb-4 px-2">Senarai Sijil</p>
+          <nav className="space-y-1">
+            {data.map(cert => (
+              <button
+                key={cert.id}
+                onClick={() => {
+                  setActiveTabId(cert.id);
+                  setExpandedTeacher(null); // Reset accordion bila tukar tab
+                  setIsSidebarOpen(false);
+                }}
+                className={`w-full flex items-center text-left px-3 py-3 rounded-lg transition-colors ${
+                  activeTabId === cert.id 
+                    ? 'bg-blue-600 text-white font-medium shadow-md' 
+                    : 'text-blue-100 hover:bg-blue-700 hover:text-white'
+                }`}
+              >
+                <Award className={`w-5 h-5 mr-3 flex-shrink-0 ${activeTabId === cert.id ? 'text-yellow-400' : 'text-blue-300'}`} />
+                <span className="text-sm truncate">{cert.name}</span>
+                <span className="ml-auto bg-blue-900 text-xs py-0.5 px-2 rounded-full font-bold">
+                  {cert.teachers.length}
+                </span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+        
+        {/* Mobile Header */}
+        <header className="bg-white shadow-sm flex items-center justify-between p-4 md:hidden">
+          <div className="flex items-center gap-2">
+            <GraduationCap className="w-6 h-6 text-blue-800 flex-shrink-0" />
+            <span className="font-bold text-gray-800 text-sm">Rekod Kepakaran SKPK Miri</span>
+          </div>
+          <button onClick={() => setIsSidebarOpen(true)} className="p-2 bg-gray-100 rounded-md text-gray-600 hover:bg-gray-200">
+            <Menu className="w-6 h-6" />
+          </button>
+        </header>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+          <div className="max-w-4xl mx-auto space-y-6">
+            
+            {/* Header Sijil (Page Title) */}
+            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-1">Kategori Sijil</h2>
+                  <h1 className="text-2xl md:text-3xl font-extrabold text-gray-900">{activeCert.name}</h1>
+                </div>
+                <div className="inline-flex items-center gap-2 bg-blue-50 text-blue-800 px-4 py-2 rounded-lg border border-blue-200 self-start md:self-auto shadow-sm">
+                  <Users className="w-5 h-5 text-blue-600" />
+                  <span className="font-semibold text-lg">Jumlah: {activeCert.teachers.length} Rekod</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Senarai Guru / Galeri */}
+              <div className="lg:col-span-2 space-y-4">
+                <h3 className="font-bold text-gray-700 text-lg flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-gray-400" /> Galeri Sijil Penerima
+                </h3>
+                
+                {activeCert.teachers.length === 0 ? (
+                  <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center flex flex-col items-center">
+                    <div className="bg-gray-100 p-3 rounded-full mb-3">
+                      <ImageIcon className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <p className="text-gray-500 font-medium">Belum ada rekod sijil untuk kategori ini.</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* PAPARAN UNTUK CANVA & MAGIC SCHOOL (Group ikut Butang Guru) */}
+                    {isGroupedCategory ? (
+                      <div className="space-y-3">
+                        {Object.keys(groupedTeachers).map((teacherName) => (
+                          <div key={teacherName} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden transition-all">
+                            
+                            {/* Butang Accordion Guru */}
+                            <button 
+                              onClick={() => setExpandedTeacher(expandedTeacher === teacherName ? null : teacherName)}
+                              className="w-full px-5 py-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors"
+                            >
+                              <span className="font-bold text-gray-800 text-lg">{teacherName}</span>
+                              <div className="flex items-center gap-3">
+                                <span className="bg-blue-100 text-blue-800 text-xs py-1 px-2.5 rounded-full font-bold">
+                                  {groupedTeachers[teacherName].length} Sijil
+                                </span>
+                                {expandedTeacher === teacherName ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+                              </div>
+                            </button>
+
+                            {/* Grid Sijil di dalam Butang Guru */}
+                            {expandedTeacher === teacherName && (
+                              <div className="p-4 bg-gray-50 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                {groupedTeachers[teacherName].map((teacherRecord) => (
+                                  <div key={teacherRecord.id} className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden group hover:border-blue-400 transition-all flex flex-col">
+                                    <div 
+                                      className="relative h-40 bg-gray-100 cursor-pointer overflow-hidden flex items-center justify-center p-2"
+                                      onClick={() => setSelectedTeacherModal(teacherRecord)}
+                                    >
+                                      <img 
+                                        src={teacherRecord.certImage} 
+                                        alt={`Sijil`} 
+                                        className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                                        onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/600x400/f8fafc/94a3b8?text=Gambar+Ralat"; }}
+                                      />
+                                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all flex items-center justify-center">
+                                        <Maximize2 className="text-white opacity-0 group-hover:opacity-100 w-8 h-8 drop-shadow-md" />
+                                      </div>
+                                    </div>
+                                    <div className="p-3 flex items-center justify-end bg-white">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); removeTeacher(teacherRecord.id); }}
+                                        className="text-red-500 bg-red-50 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-md transition-all flex items-center gap-1 border border-red-100"
+                                      >
+                                        <Trash2 className="w-4 h-4" /> <span className="text-xs font-bold">Buang Sijil</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      
+                      /* PAPARAN BIASA UNTUK KATEGORI LAIN (Grid Campur) */
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {activeCert.teachers.map((teacher) => (
+                          <div key={teacher.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden group hover:border-blue-300 transition-all flex flex-col">
+                            <div 
+                              className="relative h-48 bg-gray-100 cursor-pointer overflow-hidden flex items-center justify-center p-2"
+                              onClick={() => setSelectedTeacherModal(teacher)}
+                            >
+                              <img 
+                                src={teacher.certImage} 
+                                alt={`Sijil ${teacher.name}`} 
+                                className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                                onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/600x400/f8fafc/94a3b8?text=Gambar+Ralat"; }}
+                              />
+                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all flex items-center justify-center">
+                                <Maximize2 className="text-white opacity-0 group-hover:opacity-100 w-8 h-8 drop-shadow-md" />
+                              </div>
+                            </div>
+                            <div className="p-4 flex items-center justify-between bg-white border-t border-gray-50">
+                              <div>
+                                <p className="font-semibold text-gray-800 text-sm md:text-base line-clamp-1" title={teacher.name}>{teacher.name}</p>
+                              </div>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); removeTeacher(teacher.id); }}
+                                className="text-red-600 bg-red-50 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-md transition-all ml-2 flex-shrink-0 flex items-center gap-1.5 border border-red-100"
+                              >
+                                <Trash2 className="w-4 h-4" /> <span className="text-xs font-bold">Buang</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Form Tambah Guru */}
+              <div className="lg:col-span-1">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 sticky top-6">
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-lg">
+                    <UserPlus className="w-5 h-5 text-blue-600" /> Tambah Rekod Baru
+                  </h3>
+                  <form onSubmit={handleAddTeacher} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Nama Penuh Guru</label>
+                      <input 
+                        type="text" 
+                        value={newTeacherName}
+                        onChange={(e) => setNewTeacherName(e.target.value)}
+                        placeholder="Contoh: Ali bin Abu"
+                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+                        required
+                      />
+                      {isGroupedCategory && <p className="text-xs text-blue-600 mt-1">Sijil akan dikelompokkan ke bawah nama ini secara automatik.</p>}
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Muat Naik Fail Gambar</label>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={(e) => setSelectedFile(e.target.files[0])}
+                        ref={fileInputRef}
+                        className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="relative flex items-center py-1">
+                      <div className="flex-grow border-t border-gray-200"></div>
+                      <span className="flex-shrink-0 mx-3 text-gray-400 text-[10px] font-bold uppercase tracking-wider">ATAU</span>
+                      <div className="flex-grow border-t border-gray-200"></div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Pautan Gambar Sijil (URL)</label>
+                      <input 
+                        type="url" 
+                        value={newCertImage}
+                        onChange={(e) => setNewCertImage(e.target.value)}
+                        placeholder="https://contoh.com/gambar.jpg"
+                        disabled={!!selectedFile}
+                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
+                    </div>
+                    
+                    <button 
+                      type="submit"
+                      disabled={isUploading}
+                      className={`w-full text-white font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 mt-4 ${isUploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                      {isUploading ? (
+                        <>Menyimpan ke Pangkalan Data...</>
+                      ) : (
+                        <><UserPlus className="w-4 h-4" /> Simpan Rekod</>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Modal Paparan Gambar Penuh (Popup) */}
+      {selectedTeacherModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm" 
+          onClick={() => setSelectedTeacherModal(null)}
+        >
+          <div 
+            className="relative max-w-4xl w-full max-h-[90vh] flex flex-col items-center" 
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Modal */}
+            <div className="w-full flex justify-between items-center mb-4 text-white">
+              <div>
+                <h3 className="text-xl font-bold">{selectedTeacherModal.name}</h3>
+                <p className="text-sm text-gray-300">{activeCert.name}</p>
+              </div>
+              <button 
+                onClick={() => setSelectedTeacherModal(null)}
+                className="p-2 bg-white bg-opacity-10 hover:bg-opacity-20 rounded-full transition-all"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            {/* Gambar Penuh */}
+            <img 
+              src={selectedTeacherModal.certImage} 
+              alt={`Sijil Penuh ${selectedTeacherModal.name}`}
+              className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl"
+              onError={(e) => {
+                e.target.onerror = null;
+                e.target.src = "https://placehold.co/800x600/f8fafc/94a3b8?text=Gambar+Ralat";
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
