@@ -53,7 +53,6 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // Data permulaan (Hanya digunakan jika pangkalan data masih kosong)
         const initialData = [
             { id: 1, name: "Google Certified Educator Level 1", teachers: [] },
             { id: 2, name: "Google Certified Educator Level 2", teachers: [] },
@@ -79,7 +78,7 @@
             }
         ];
 
-        // Fungsi mengecilkan saiz gambar
+        // Fungsi mengecilkan saiz gambar (Dimampatkan lebih kecil untuk elak limitasi Firestore)
         const compressImage = (file) => {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -89,8 +88,8 @@
                     img.src = event.target.result;
                     img.onload = () => {
                         const canvas = document.createElement('canvas');
-                        const MAX_WIDTH = 800; 
-                        const MAX_HEIGHT = 800;
+                        const MAX_WIDTH = 600; // Saiz dikecilkan sikit
+                        const MAX_HEIGHT = 600;
                         let width = img.width;
                         let height = img.height;
 
@@ -106,7 +105,7 @@
                         canvas.height = height;
                         const ctx = canvas.getContext('2d');
                         ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
+                        resolve(canvas.toDataURL('image/jpeg', 0.6)); // Kualiti 60%
                     };
                 };
                 reader.onerror = (error) => reject(error);
@@ -187,7 +186,8 @@
                     const updatedTeachers = [...activeCert.teachers, newTeacher];
                     const categoryRef = doc(db, 'categories', String(activeTabId));
                     
-                    await updateDoc(categoryRef, { teachers: updatedTeachers });
+                    // PENYELESAIAN RALAT: Guna setDoc dengan merge, bukan updateDoc
+                    await setDoc(categoryRef, { teachers: updatedTeachers }, { merge: true });
 
                     setNewTeacherName("");
                     setNewCertImage("");
@@ -195,8 +195,9 @@
                     if (fileInputRef.current) fileInputRef.current.value = "";
                 } catch (error) {
                     console.error("Ralat menambah guru:", error);
-                    setUploadError("Terdapat ralat semasa memuat naik gambar. Sila cuba lagi.");
-                    setTimeout(() => setUploadError(""), 5000);
+                    // Paparkan mesej ralat sebenar jika wujud
+                    setUploadError(`Ralat: ${error.message || "Sila pastikan fungsi Anonymous Auth telah dihidupkan di Firebase."}`);
+                    setTimeout(() => setUploadError(""), 8000);
                 } finally {
                     setIsUploading(false);
                 }
@@ -206,7 +207,7 @@
                 try {
                     const updatedTeachers = activeCert.teachers.filter(t => t.id !== teacherId);
                     const categoryRef = doc(db, 'categories', String(activeTabId));
-                    await updateDoc(categoryRef, { teachers: updatedTeachers });
+                    await setDoc(categoryRef, { teachers: updatedTeachers }, { merge: true });
                 } catch (error) {
                     console.error("Ralat memadam rekod:", error);
                 }
@@ -448,7 +449,7 @@
                                                     />
                                                 </div>
                                                 
-                                                {uploadError && <div className="text-xs text-red-500 font-medium bg-red-50 p-2 rounded">{uploadError}</div>}
+                                                {uploadError && <div className="text-xs text-red-600 font-bold bg-red-100 border border-red-200 p-3 rounded-lg leading-tight">{uploadError}</div>}
 
                                                 <button 
                                                     type="submit"
