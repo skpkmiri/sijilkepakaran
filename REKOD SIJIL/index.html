@@ -37,7 +37,8 @@
         import { Award, Users, UserPlus, Link as LinkIcon, Menu, X, GraduationCap, ImageIcon, Maximize2, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+        // Tambahan deleteDoc untuk padam data dengan betul
+        import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 
         // --- KONFIGURASI FIREBASE SENDIRI (Projek SKPK Miri) ---
         const firebaseConfig = {
@@ -53,32 +54,17 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        const initialData = [
+        // Kategori Asas (Kosongkan nama contoh supaya sedia untuk digunakan)
+        const initialCategories = [
             { id: 1, name: "Google Certified Educator Level 1", teachers: [] },
             { id: 2, name: "Google Certified Educator Level 2", teachers: [] },
             { id: 3, name: "Gemini Certified Educator", teachers: [] },
             { id: 4, name: "Raspberry Pi Instructor", teachers: [] },
-            { 
-                id: 5, 
-                name: "Canva Certified", 
-                teachers: [
-                    { id: 101, name: "Jacquelinne Tiong Hoe Ding", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nJacquelinne" },
-                    { id: 102, name: "Mohamad Abidin bin Sipek", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nMohamad+Abidin" },
-                    { id: 103, name: "Ling Mee Choo", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nLing+Mee+Choo" },
-                    { id: 104, name: "Sabariah binti Solhi", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Canva\nSabariah" }
-                ] 
-            },
-            { 
-                id: 6, 
-                name: "Magic School : AI Educator", 
-                teachers: [
-                    { id: 105, name: "Ling Mee Choo", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Magic+School\nLing+Mee+Choo" },
-                    { id: 106, name: "Mohamad Abidin bin Sipek", certImage: "https://placehold.co/600x400/e2e8f0/475569?text=Sijil+Magic+School\nMohamad+Abidin" }
-                ] 
-            }
+            { id: 5, name: "Canva Certified", teachers: [] },
+            { id: 6, name: "Magic School : AI Educator", teachers: [] }
         ];
 
-        // Fungsi mengecilkan saiz gambar (Dimampatkan lebih kecil untuk elak limitasi Firestore)
+        // Fungsi memampatkan gambar (Saiz 800px untuk kekalkan kualiti sijil yang jelas)
         const compressImage = (file) => {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -88,8 +74,8 @@
                     img.src = event.target.result;
                     img.onload = () => {
                         const canvas = document.createElement('canvas');
-                        const MAX_WIDTH = 600; // Saiz dikecilkan sikit
-                        const MAX_HEIGHT = 600;
+                        const MAX_WIDTH = 800; 
+                        const MAX_HEIGHT = 800;
                         let width = img.width;
                         let height = img.height;
 
@@ -105,7 +91,9 @@
                         canvas.height = height;
                         const ctx = canvas.getContext('2d');
                         ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/jpeg', 0.6)); // Kualiti 60%
+                        
+                        // Gambar dimampatkan pada kualiti 70%
+                        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
                     };
                 };
                 reader.onerror = (error) => reject(error);
@@ -114,7 +102,7 @@
 
         function App() {
             const [user, setUser] = useState(null);
-            const [data, setData] = useState(initialData);
+            const [data, setData] = useState(initialCategories);
             const [activeTabId, setActiveTabId] = useState(1);
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             
@@ -128,6 +116,7 @@
             const [expandedTeacher, setExpandedTeacher] = useState(null); 
             const fileInputRef = useRef(null);
 
+            // Log Masuk Automatik
             useEffect(() => {
                 const initAuth = async () => {
                     try {
@@ -141,27 +130,38 @@
                 return () => unsubscribe();
             }, []);
 
+            // Tarik Data (Struktur Baharu: 1 Guru = 1 Fail Dokumen)
             useEffect(() => {
                 if (!user) return;
-                const categoriesRef = collection(db, 'categories');
-                const unsubscribe = onSnapshot(categoriesRef, (snapshot) => {
-                    if (snapshot.empty) {
-                        initialData.forEach(async (cat) => {
-                            await setDoc(doc(categoriesRef, String(cat.id)), cat);
-                        });
-                    } else {
-                        const loadedData = snapshot.docs.map(doc => doc.data());
-                        loadedData.sort((a, b) => a.id - b.id);
-                        setData(loadedData);
-                    }
+                
+                // Menggunakan koleksi baharu 'rekod_guru'
+                const recordsRef = collection(db, 'rekod_guru');
+                
+                const unsubscribe = onSnapshot(recordsRef, (snapshot) => {
+                    // Sediakan kategori yang kosong
+                    const updatedCategories = JSON.parse(JSON.stringify(initialCategories));
+                    
+                    // Masukkan setiap guru ke dalam kategorinya
+                    snapshot.docs.forEach(docSnap => {
+                        const teacherData = docSnap.data();
+                        const categoryIndex = updatedCategories.findIndex(c => c.id === teacherData.categoryId);
+                        
+                        if (categoryIndex !== -1) {
+                            updatedCategories[categoryIndex].teachers.push(teacherData);
+                        }
+                    });
+                    
+                    setData(updatedCategories);
                 }, (error) => {
                     console.error("Ralat pangkalan data:", error);
                 });
+                
                 return () => unsubscribe();
             }, [user]);
 
             const activeCert = data.find(cert => cert.id === activeTabId) || data[0];
 
+            // Tambah Rekod (Struktur Baharu)
             const handleAddTeacher = async (e) => {
                 e.preventDefault();
                 if (!newTeacherName.trim() || isUploading) return;
@@ -177,37 +177,38 @@
                         finalImage = `https://placehold.co/600x400/f8fafc/94a3b8?text=Sijil+Direkod\n${newTeacherName.split(' ').join('+')}`;
                     }
 
+                    const newTeacherId = Date.now();
                     const newTeacher = {
-                        id: Date.now(),
+                        id: newTeacherId,
+                        categoryId: activeTabId, // Simpan ID kategori supaya ia masuk bilik yang betul
                         name: newTeacherName.trim(), 
                         certImage: finalImage
                     };
 
-                    const updatedTeachers = [...activeCert.teachers, newTeacher];
-                    const categoryRef = doc(db, 'categories', String(activeTabId));
-                    
-                    // PENYELESAIAN RALAT: Guna setDoc dengan merge, bukan updateDoc
-                    await setDoc(categoryRef, { teachers: updatedTeachers }, { merge: true });
+                    // SIMPAN: 1 Guru menjadi 1 fail berasingan. Tiada lagi limit 1MB!
+                    const teacherDocRef = doc(db, 'rekod_guru', String(newTeacherId));
+                    await setDoc(teacherDocRef, newTeacher);
 
+                    // Kosongkan form
                     setNewTeacherName("");
                     setNewCertImage("");
                     setSelectedFile(null);
                     if (fileInputRef.current) fileInputRef.current.value = "";
                 } catch (error) {
                     console.error("Ralat menambah guru:", error);
-                    // Paparkan mesej ralat sebenar jika wujud
-                    setUploadError(`Ralat: ${error.message || "Sila pastikan fungsi Anonymous Auth telah dihidupkan di Firebase."}`);
+                    setUploadError(`Ralat: ${error.message || "Gagal memuat naik. Sila cuba lagi."}`);
                     setTimeout(() => setUploadError(""), 8000);
                 } finally {
                     setIsUploading(false);
                 }
             };
 
+            // Buang Rekod (Struktur Baharu)
             const removeTeacher = async (teacherId) => {
                 try {
-                    const updatedTeachers = activeCert.teachers.filter(t => t.id !== teacherId);
-                    const categoryRef = doc(db, 'categories', String(activeTabId));
-                    await setDoc(categoryRef, { teachers: updatedTeachers }, { merge: true });
+                    // PADAM: Buang terus fail guru tersebut
+                    const teacherDocRef = doc(db, 'rekod_guru', String(teacherId));
+                    await deleteDoc(teacherDocRef);
                 } catch (error) {
                     console.error("Ralat memadam rekod:", error);
                 }
